@@ -95,6 +95,13 @@ static int buffer_put_packet(struct state *st, struct pkt *pkt) {
 }
 
 
+static int is_ib_command(struct state *st, struct pkt *pkt) {
+    return (pkt->header.type == PACKET_COMMAND
+            && (pkt->data.command.cmd[0] == 'i'
+            &&  pkt->data.command.cmd[1] == 'b')
+            );
+}
+
 static int is_sync_point(struct state *st, struct pkt *pkt) {
     return ((pkt->header.type == PACKET_HELLO)
     || (pkt->header.type == PACKET_COMMAND
@@ -176,11 +183,20 @@ static int st_searching(struct state *st) {
             packet_unget(st, &pkt);
             break;
         }
+
+        // If it's a regular "IB" command, we're re-syncing.  Backtrack to
+        // here later on.
+        else if (is_ib_command(st, &pkt)) {
+            packet_get_next(st, &pkt);
+            st->last_run_offset = lseek(st->fd, 0, SEEK_CUR);
+        }
     }
 
     // -2 is the EOF error.  Backtrack and fill things out.
-    if (ret == -2)
+    if (ret == -2) {
         jstate_set(st, ST_BACKTRACK);
+        return st_backtrack(st);
+    }
 
     return ret;
 }
@@ -192,16 +208,30 @@ static int st_backtrack(struct state *st) {
     int ret;
     int before_nand = 1;
     
+    ret = lseek(st->fd, st->last_run_offset, SEEK_SET);
+    if (-1 == ret) {
+        perror("Unable to backtrack");
+    }
+
     // Read every packet from the last 
     while ((ret = packet_get_next(st, &pkt)) == 0) {
+
+        // Eventually we'll hit the sync point that brought us here.
+        // Return to searching.
         if (is_sync_point(st, &pkt)) {
-            if (pkt.header.type == PACKET_HELLO)
+            if (pkt.header.type == PACKET_HELLO) {
+                pkt.header.sec = 0;
+                pkt.header.nsec = 0;
                 packet_write(st, &pkt);
+            }
             jstate_set(st, ST_SEARCHING);
+            st->last_run_offset = lseek(st->fd, 0, SEEK_CUR);
             break;
         }
+
         else if (is_nand(st, &pkt))
             before_nand = 0;
+
         else {
             int nsec_dif, sec_dif;
             if (before_nand) {
@@ -229,6 +259,19 @@ static int st_backtrack(struct state *st) {
                 }
                 pkt.header.sec -= sec_dif;
             }
+
+            if ( (st->last_sec > pkt.header.sec + st->last_sec_adjust)
+            || ((st->last_sec == pkt.header.sec + st->last_sec_adjust) && (st->last_nsec >
+                    pkt.header.nsec))) {
+                printf("%d/%d Last nsec (%d) > current nsec (%d)\n",
+                        st->last_sec, pkt.header.sec,
+                        st->last_nsec, pkt.header.nsec);
+                st->last_sec_adjust += (st->last_sec - pkt.header.sec +
+                        st->last_sec_adjust)+1;
+            }
+            st->last_sec = pkt.header.sec;
+            st->last_nsec = pkt.header.nsec;
+            pkt.header.sec += st->last_sec_adjust;
             packet_write(st, &pkt);
         }
     }
@@ -316,10 +359,18 @@ static int st_joining(struct state *st) {
                 if (matches_found >= REQUIRED_MATCHES-1) {
                     st->last_sec_dif = st->sec_dif;
                     st->last_nsec_dif = st->nsec_dif;
-                    st->sec_dif = ntohl(pkts[i].header.sec) -
-                        ntohl(old_pkts[i].header.sec);
-                    st->nsec_dif = ntohl(pkts[i].header.nsec) -
-                        ntohl(old_pkts[i].header.nsec);
+                    st->sec_dif =
+                        pkts[REQUIRED_MATCHES/2].header.sec-old_pkts[REQUIRED_MATCHES/2].header.sec;
+                    st->nsec_dif =
+                        pkts[REQUIRED_MATCHES/2].header.nsec-old_pkts[REQUIRED_MATCHES/2].header.nsec;
+                    if (st->nsec_dif > 1000000000L) {
+                        st->nsec_dif -= 1000000000L;
+                        st->sec_dif++;
+                    }
+                    else if (st->nsec_dif < 0) {
+                        st->nsec_dif += 1000000000L;
+                        st->sec_dif--;
+                    }
                     synced=1;
                     buffer_unget_packet(st, old_pkts);
                 }
@@ -418,114 +469,3 @@ int main(int argc, char **argv) {
     return 0;
 }
 
-#if 0
-    while (-1 != packet_get_next(&state, &pkt)) {
-        if (pkt.header.type == PACKET_ERROR) {
-            if (pkt.data.error.subsystem == SUBSYS_FPGA
-                    && pkt.data.error.code == FPGA_ERR_OVERFLOW) {
-                state.st = ST_OVERFLOWED;
-            }
-            else {
-                printf("Packet: %s - %d.%d.%d (%s)\n", types[pkt.header.type],
-                    pkt.data.error.subsystem,
-                    pkt.data.error.code,
-                    pkt.data.error.arg,
-                    pkt.data.error.message);
-            }
-        }
-        else if (pkt.header.type == PACKET_BUFFER_DRAIN) {
-//            printf("Packet: %s - %s\n", types[pkt.header.type],
-//                    pkt.data.buffer_drain.start_stop==1?"Start":"Stop");
-            if (pkt.data.buffer_drain.start_stop == PKT_BUFFER_DRAIN_STOP) {
-                if (state.st == ST_OVERFLOWED) {
-                    state.st = ST_JOINING;
-                    state.skip_counter = 0;
-                    state.search_limit = 0;
-                    state.sec_dif = 0;
-                    state.nsec_dif = 0;
-                }
-                else {
-                    state.st = ST_RUNNING;
-                }
-            }
-
-            else if (pkt.data.buffer_drain.start_stop == PKT_BUFFER_DRAIN_START) {
-                if (state.st == ST_JOINING) {
-//                    printf("Beginning join process...\n");
-                }
-                else {
-//                    printf("Normal drain\n");
-                    state.st = ST_DRAINING;
-                }
-            }
-        }
-        else if (pkt.header.type == PACKET_NAND_CYCLE) {
-
-            if (state.st == ST_JOINING) {
-                if (state.skip_counter+state.search_limit < SKIP_AMOUNT) {
-                    struct pkt old_pkt;
-                    buffer_get_packet(&state, &old_pkt);
-                    while (pkt.data.nand_cycle.data != old_pkt.data.nand_cycle.data
-                        && state.search_limit < SEARCH_LIMIT)
-                    {
-                        state.search_limit++;
-                        buffer_get_packet(&state, &old_pkt);
-                    }
-
-                    if (old_pkt.data.nand_cycle.data != pkt.data.nand_cycle.data) {
-                        state.search_limit = 0;
-                        buffer_get_packet(&state, &old_pkt);
-                        printf("Byte %d -- New: %02x %02x   Old: %02x %02x\n",
-                            state.skip_counter,
-                            nand_unscramble_byte(pkt.data.nand_cycle.data)&0xff,
-                            pkt.data.nand_cycle.control&0xff,
-                            nand_unscramble_byte(old_pkt.data.nand_cycle.data)&0xff,
-                            old_pkt.data.nand_cycle.control&0xff);
-                        // Back up by one and try again on the next loop around
-                        state.buffer_offset--;
-                        state.search_limit = 0;
-			continue;
-                    }
-                    else {
-                        state.sec_dif = old_pkt.header.sec - pkt.header.sec;
-                        state.nsec_dif = old_pkt.header.nsec - pkt.header.nsec;
-                    }
-                    state.skip_counter++;
-                    pkt.header.sec += state.sec_dif;
-                    pkt.header.nsec += state.nsec_dif;
-                }
-                else {
-                    write(state.out_fd, &pkt, ntohs(pkt.header.size));
-                    pkt.header.sec += state.sec_dif;
-                    pkt.header.nsec += state.nsec_dif;
-                }
-            }
-            else
-                write(state.out_fd, &pkt, ntohs(pkt.header.size));
-            nand_print(&state, pkt.data.nand_cycle.data, pkt.data.nand_cycle.control);
-            memcpy(&packet_buffer[state.buffer_offset], &pkt, sizeof(pkt));
-            state.buffer_offset++;
-            state.buffer_offset %= SKIP_AMOUNT;
-
-        }
-
-        else if (pkt.header.type == PACKET_COMMAND) {
-            char *dir = ">>>";
-            if (pkt.data.command.start_stop == 2) {
-                dir = "<<<";
-                if (pkt.data.command.cmd[0] == 'i' && pkt.data.command.cmd[1] == 'b')
-                    printf("%s %c%c %d\n", dir,
-                            pkt.data.command.cmd[0],
-                            pkt.data.command.cmd[1],
-                            ntohl(pkt.data.command.arg));
-            }
-            if (state.commands++ > 50 && state.st != ST_JOINING && state.st
-                    != ST_OVERFLOWED)
-                state.is_logging = 1;
-        }
-        else {
-//            printf("Packet: %s\n", types[pkt.header.type]);
-        }
-
-    }
-#endif
