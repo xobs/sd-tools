@@ -260,16 +260,11 @@ static int st_backtrack(struct state *st) {
                 pkt.header.sec -= sec_dif;
             }
 
-            if ( (st->last_sec > pkt.header.sec + st->last_sec_adjust)
-            || ((st->last_sec == pkt.header.sec + st->last_sec_adjust)
-                    && (st->last_nsec > pkt.header.nsec))) {
-                printf("%d/%d Last nsec (%d) > current nsec (%d)\n",
-                        st->last_sec, pkt.header.sec,
-                        st->last_nsec, pkt.header.nsec);
-                st->last_sec_adjust += (st->last_sec - pkt.header.sec +
-                        st->last_sec_adjust)+1;
-            }
-            pkt.header.sec += st->last_sec_adjust;
+            if (pkt.header.sec < 0)
+                printf("!!! Warning: header.sec < 0: %d\n", pkt.header.sec);
+            if (pkt.header.nsec < 0)
+                printf("!!! Warning: header.nsec < 0: %d\n", pkt.header.nsec);
+
             st->last_sec = pkt.header.sec;
             st->last_nsec = pkt.header.nsec;
             packet_write(st, &pkt);
@@ -360,9 +355,9 @@ static int st_joining(struct state *st) {
                     st->last_sec_dif = st->sec_dif;
                     st->last_nsec_dif = st->nsec_dif;
                     st->sec_dif =
-                        pkts[REQUIRED_MATCHES/2].header.sec-old_pkts[REQUIRED_MATCHES/2].header.sec;
+                        -(pkts[REQUIRED_MATCHES/2].header.sec-old_pkts[REQUIRED_MATCHES/2].header.sec);
                     st->nsec_dif =
-                        pkts[REQUIRED_MATCHES/2].header.nsec-old_pkts[REQUIRED_MATCHES/2].header.nsec;
+                        -(pkts[REQUIRED_MATCHES/2].header.nsec-old_pkts[REQUIRED_MATCHES/2].header.nsec);
                     if (st->nsec_dif > 1000000000L) {
                         st->nsec_dif -= 1000000000L;
                         st->sec_dif++;
