@@ -15,14 +15,31 @@ int packet_get_next(struct state *st, struct pkt *pkt) {
         return -1;
 
     if (ret == 0)
-        return -1;
+        return -2;
+    pkt->header.sec = ntohl(pkt->header.sec);
+    pkt->header.nsec = ntohl(pkt->header.nsec);
+    pkt->header.size = ntohs(pkt->header.size);
 
-    ret = read(st->fd, &pkt->data, ntohs(pkt->header.size)-sizeof(pkt->header));
+    ret = read(st->fd, &pkt->data, pkt->header.size-sizeof(pkt->header));
     if (ret < 0)
         return -1;
 
     if (ret == 0)
-        return -1;
+        return -2;
 
     return 0;
+}
+
+int packet_unget(struct state *st, struct pkt *pkt) {
+    return lseek(st->fd, -pkt->header.size, SEEK_CUR);
+}
+
+int packet_write(struct state *st, struct pkt *pkt) {
+    struct pkt cp;
+    memcpy(&cp, pkt, sizeof(cp));
+    cp.header.sec = htonl(pkt->header.sec);
+    cp.header.nsec = htonl(pkt->header.nsec);
+    cp.header.size = htons(pkt->header.size);
+
+    return write(st->out_fd, &cp, ntohs(cp.header.size));
 }

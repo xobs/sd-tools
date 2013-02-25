@@ -261,17 +261,17 @@ static int st_backtrack(struct state *st) {
             }
 
             if ( (st->last_sec > pkt.header.sec + st->last_sec_adjust)
-            || ((st->last_sec == pkt.header.sec + st->last_sec_adjust) && (st->last_nsec >
-                    pkt.header.nsec))) {
+            || ((st->last_sec == pkt.header.sec + st->last_sec_adjust)
+                    && (st->last_nsec > pkt.header.nsec))) {
                 printf("%d/%d Last nsec (%d) > current nsec (%d)\n",
                         st->last_sec, pkt.header.sec,
                         st->last_nsec, pkt.header.nsec);
                 st->last_sec_adjust += (st->last_sec - pkt.header.sec +
                         st->last_sec_adjust)+1;
             }
+            pkt.header.sec += st->last_sec_adjust;
             st->last_sec = pkt.header.sec;
             st->last_nsec = pkt.header.nsec;
-            pkt.header.sec += st->last_sec_adjust;
             packet_write(st, &pkt);
         }
     }
