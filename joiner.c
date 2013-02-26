@@ -172,7 +172,7 @@ static int st_uninitialized(struct state *st) {
 static int st_searching(struct state *st) {
     struct pkt pkt;
     int ret;
-    while ((ret = packet_get_next(st, &pkt)) == 0) {
+    while ((ret = packet_get_next_raw(st, &pkt)) == 0) {
         if (is_sync_point(st, &pkt)) {
             jstate_set(st, ST_BACKTRACK);
             packet_unget(st, &pkt);
@@ -187,7 +187,7 @@ static int st_searching(struct state *st) {
         // If it's a regular "IB" command, we're re-syncing.  Backtrack to
         // here later on.
         else if (is_ib_command(st, &pkt)) {
-            packet_get_next(st, &pkt);
+            packet_get_next_raw(st, &pkt);
             st->last_run_offset = lseek(st->fd, 0, SEEK_CUR);
         }
     }
@@ -214,7 +214,7 @@ static int st_backtrack(struct state *st) {
     }
 
     // Read every packet from the last 
-    while ((ret = packet_get_next(st, &pkt)) == 0) {
+    while ((ret = packet_get_next_raw(st, &pkt)) == 0) {
 
         // Eventually we'll hit the sync point that brought us here.
         // Return to searching.
@@ -329,7 +329,7 @@ static int st_joining(struct state *st) {
              (disk_offset+REQUIRED_MATCHES) < SKIP_AMOUNT && !synced;
              disk_offset++) {
 
-            fill_buffer(st, pkts, REQUIRED_MATCHES, packet_get_next);
+            fill_buffer(st, pkts, REQUIRED_MATCHES, packet_get_next_raw);
 
             for (st->search_limit = 0;
                  (st->search_limit + REQUIRED_MATCHES) < SKIP_AMOUNT && !synced;
@@ -379,7 +379,7 @@ static int st_joining(struct state *st) {
                 empty_buffer(st, pkts, REQUIRED_MATCHES, packet_unget);
                 empty_buffer(st, old_pkts, REQUIRED_MATCHES,
                         buffer_unget_packet);
-                packet_get_next(st, pkts);
+                packet_get_next_raw(st, pkts);
             }
         }
         if (!synced)
@@ -393,7 +393,7 @@ static int st_joining(struct state *st) {
             struct pkt old_pkt;
             int dat, old_dat, ctrl, old_ctrl;
             buffer_get_packet(st, &old_pkt);
-            packet_get_next(st, &pkt);
+            packet_get_next_raw(st, &pkt);
 
             dat = pkt.data.nand_cycle.data;
             old_dat = old_pkt.data.nand_cycle.data;
@@ -411,7 +411,7 @@ static int st_joining(struct state *st) {
     }
 
     // Done now, copy data
-    while ((ret = packet_get_next(st, &pkt)) == 0) {
+    while ((ret = packet_get_next_raw(st, &pkt)) == 0) {
         if (!is_nand(st, &pkt)) {
             packet_unget(st, &pkt);
             jstate_set(st, ST_SEARCHING);

@@ -38,7 +38,7 @@ uint8_t nand_unscramble_byte(uint8_t byte) {
 
 int nand_print(struct state *st, uint8_t data, uint8_t ctrl) {
     printf("NAND %02x %c %c %c %c %c %c\n",
-            nand_unscramble_byte(data),
+            data,
             ctrl&NAND_ALE?'A':' ',
             ctrl&NAND_CLE?'C':' ',
             ctrl&NAND_WE?'W':' ',
@@ -46,4 +46,28 @@ int nand_print(struct state *st, uint8_t data, uint8_t ctrl) {
             ctrl&NAND_CS?'S':' ',
             ctrl&NAND_RB?'B':' ');
     return 0;
+}
+
+uint8_t nand_ale(uint8_t ctrl) {
+    return ctrl&NAND_ALE;
+}
+
+uint8_t nand_cle(uint8_t ctrl) {
+    return ctrl&NAND_CLE;
+}
+
+uint8_t nand_we(uint8_t ctrl) {
+    return ctrl&NAND_WE;
+}
+
+uint8_t nand_re(uint8_t ctrl) {
+    return ctrl&NAND_RE;
+}
+
+uint8_t nand_cs(uint8_t ctrl) {
+    return ctrl&NAND_CS;
+}
+
+uint8_t nand_rb(uint8_t ctrl) {
+    return ctrl&NAND_RB;
 }
