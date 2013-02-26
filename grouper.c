@@ -28,13 +28,6 @@ static char *types[] = {
         "PACKET_HELLO",
 };
 
-static const char *states[] = {
-    "ST_UNINITIALIZED",
-    "ST_SCANNING",
-    "ST_GROUPING",
-    "ST_DONE",
-};
-
 enum prog_state {
     ST_UNINITIALIZED,
     ST_SCANNING,
@@ -429,11 +422,13 @@ static int grp_write_nand_change_read_column(struct state *st, struct pkt *pkt) 
 
     grp.count = 0;
     grp_fill_end(&grp, pkts[6].header.sec, pkts[6].header.nsec);
+    memcpy(grp.unknown, &pkt->data.nand_cycle.unknown, sizeof(grp.unknown));
     packet_get_next(st, pkt);
     while (nand_re(pkt->data.nand_cycle.control)) {
         grp.data[grp.count++] = pkt->data.nand_cycle.data;
 
         grp_fill_end(&grp, pkt->header.sec, pkt->header.nsec);
+        memcpy(grp.unknown, &pkt->data.nand_cycle.unknown, sizeof(grp.unknown));
         packet_get_next(st, pkt);
     }
     packet_unget(st, pkt);
@@ -489,11 +484,13 @@ static int grp_write_nand_read(struct state *st, struct pkt *pkt) {
 
     grp.count = 0;
     grp_fill_end(&grp, pkts[6].header.sec, pkts[6].header.nsec);
+    memcpy(grp.unknown, &pkt->data.nand_cycle.unknown, sizeof(grp.unknown));
     packet_get_next(st, pkt);
     while (nand_re(pkt->data.nand_cycle.control)) {
         grp.data[grp.count++] = pkt->data.nand_cycle.data;
 
         grp_fill_end(&grp, pkt->header.sec, pkt->header.nsec);
+        memcpy(grp.unknown, &pkt->data.nand_cycle.unknown, sizeof(grp.unknown));
         packet_get_next(st, pkt);
     }
     packet_unget(st, pkt);
