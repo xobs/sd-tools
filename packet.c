@@ -7,7 +7,7 @@
 #include "packet-struct.h"
 #include "state.h"
 
-int packet_get_next(struct state *st, struct pkt *pkt) {
+int packet_get_next_raw(struct state *st, struct pkt *pkt) {
     int ret;
 
     ret = read(st->fd, &pkt->header, sizeof(pkt->header));
@@ -28,6 +28,16 @@ int packet_get_next(struct state *st, struct pkt *pkt) {
         return -2;
 
     return 0;
+}
+
+int packet_get_next(struct state *st, struct pkt *pkt) {
+    int ret;
+    ret = packet_get_next_raw(st, pkt);
+    if (ret)
+        return ret;
+    if (pkt->header.type == PACKET_NAND_CYCLE)
+        pkt->data.nand_cycle.data = nand_unscramble_byte(pkt->data.nand_cycle.data);
+    return ret;
 }
 
 int packet_unget(struct state *st, struct pkt *pkt) {

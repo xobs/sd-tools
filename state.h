@@ -28,13 +28,24 @@ struct state {
     int last_sec_dif, last_nsec_dif;
 
     int join_buffer_capacity;
+
+    /* For group-joining, a list of open items */
+    struct grp_header *groups[128];
 };
 
 int packet_get_next(struct state *st, struct pkt *pkt);
+int packet_get_next_raw(struct state *st, struct pkt *pkt);
 int packet_unget(struct state *st, struct pkt *pkt);
 int packet_write(struct state *st, struct pkt *pkt);
 
 uint8_t nand_unscramble_byte(uint8_t byte);
 int nand_print(struct state *st, uint8_t data, uint8_t ctrl);
+uint8_t nand_ale(uint8_t ctrl);
+uint8_t nand_cle(uint8_t ctrl);
+uint8_t nand_we(uint8_t ctrl);
+uint8_t nand_re(uint8_t ctrl);
+uint8_t nand_cs(uint8_t ctrl);
+uint8_t nand_rb(uint8_t ctrl);
+
 
 #endif // __STATE_H__
