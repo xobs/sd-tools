@@ -4,8 +4,9 @@
 #include <unistd.h>
 #include <string.h>
 #include <sys/types.h>
+#include <arpa/inet.h>
 #include "packet-struct.h"
-#include "groups-struct.h"
+#include "event-struct.h"
 #include "state.h"
 
 #define SKIP_AMOUNT 80
@@ -65,68 +66,72 @@ static int open_files(struct state *st, char *infile, char *outfile) {
 }
 
 
-static int grp_write_id(struct state *st, struct pkt *pkt) {
-    struct grp_nand_id grp;
-    int byte;
+static int evt_write_id(struct state *st, struct pkt *pkt) {
+    struct evt_nand_id evt;
 
-    grp_fill_header(&grp, pkt->header.sec, pkt->header.nsec,
-                    sizeof(grp), GRP_NAND_ID);
+    evt_fill_header(&evt, pkt->header.sec, pkt->header.nsec,
+                    sizeof(evt), EVT_NAND_ID);
 
     // Grab the "address" byte.
     packet_get_next(st, pkt);
     if (!nand_ale(pkt->data.nand_cycle.control)
      || !nand_we(pkt->data.nand_cycle.control))
         fprintf(stderr, "Warning: ALE/WE not set for 'Read ID'\n");
-    grp.addr = pkt->data.nand_cycle.data;
+    evt.addr = pkt->data.nand_cycle.data;
 
     // Read the actual ID
-    for (byte=0; byte<sizeof(grp.id); byte++) {
+    evt_fill_end(&evt, pkt->header.sec, pkt->header.nsec);
+    packet_get_next(st, pkt);
+    for (evt.size=0;
+         evt.size<sizeof(evt.id) && nand_re(pkt->data.nand_cycle.control);
+         evt.size++) {
+        evt.id[evt.size] = pkt->data.nand_cycle.data;
+        evt_fill_end(&evt, pkt->header.sec, pkt->header.nsec);
         packet_get_next(st, pkt);
-        if (nand_we(pkt->data.nand_cycle.control)
-         || !nand_re(pkt->data.nand_cycle.control))
-            fprintf(stderr, "Warning: RE not set for 'Read ID'\n");
-        grp.id[byte] = pkt->data.nand_cycle.data;
     }
 
-    grp_fill_end(&grp, pkt->header.sec, pkt->header.nsec);
-    write(st->out_fd, &grp, sizeof(grp));
+    if (!nand_re(pkt->data.nand_cycle.control))
+        packet_unget(st, pkt);
+
+    evt_fill_end(&evt, pkt->header.sec, pkt->header.nsec);
+    write(st->out_fd, &evt, sizeof(evt));
     return 0;
 }
 
-static int grp_write_sandisk_set(struct state *st, struct pkt *pkt) {
-    struct grp_nand_unk_sandisk_code grp;
+static int evt_write_sandisk_set(struct state *st, struct pkt *pkt) {
+    struct evt_nand_unk_sandisk_code evt;
     struct pkt second_pkt;
-    grp_fill_header(&grp, pkt->header.sec, pkt->header.nsec,
-                    sizeof(grp), GRP_NAND_SANDISK_VENDOR_START);
+    evt_fill_header(&evt, pkt->header.sec, pkt->header.nsec,
+                    sizeof(evt), EVT_NAND_SANDISK_VENDOR_START);
 
     // Make sure the subsequent packet is 0xc5
     packet_get_next(st, &second_pkt);
     if (!nand_cle(second_pkt.data.nand_cycle.control)
      || second_pkt.data.nand_cycle.data != 0xc5) {
         fprintf(stderr, "Not a Sandisk packet!\n");
-        grp_write_nand_unk(st, pkt);
-        grp_write_nand_unk(st, &second_pkt);
+        evt_write_nand_unk(st, pkt);
+        evt_write_nand_unk(st, &second_pkt);
         return 0;
     }
 
-    grp_fill_end(&grp, second_pkt.header.sec, second_pkt.header.nsec);
-    write(st->out_fd, &grp, sizeof(grp));
+    evt_fill_end(&evt, second_pkt.header.sec, second_pkt.header.nsec);
+    write(st->out_fd, &evt, sizeof(evt));
     return 0;
 }
 
-static int grp_write_sandisk_param(struct state *st, struct pkt *pkt) {
-    struct grp_nand_unk_sandisk_param grp;
+static int evt_write_sandisk_param(struct state *st, struct pkt *pkt) {
+    struct evt_nand_unk_sandisk_param evt;
     struct pkt second_pkt, third_pkt;
-    grp_fill_header(&grp, pkt->header.sec, pkt->header.nsec,
-                    sizeof(grp), GRP_NAND_SANDISK_VENDOR_PARAM);
+    evt_fill_header(&evt, pkt->header.sec, pkt->header.nsec,
+                    sizeof(evt), EVT_NAND_SANDISK_VENDOR_PARAM);
 
     // Make sure the subsequent packet is an address
     packet_get_next(st, &second_pkt);
     if (!nand_ale(second_pkt.data.nand_cycle.control)
      && !nand_we(second_pkt.data.nand_cycle.control)) {
         fprintf(stderr, "Not a Sandisk param packet!\n");
-        grp_write_nand_unk(st, pkt);
-        grp_write_nand_unk(st, &second_pkt);
+        evt_write_nand_unk(st, pkt);
+        evt_write_nand_unk(st, &second_pkt);
         return 0;
     }
 
@@ -135,26 +140,26 @@ static int grp_write_sandisk_param(struct state *st, struct pkt *pkt) {
      || nand_cle(third_pkt.data.nand_cycle.control)
      || nand_re(third_pkt.data.nand_cycle.control)) {
         fprintf(stderr, "Not a Sandisk param packet!\n");
-        grp_write_nand_unk(st, pkt);
-        grp_write_nand_unk(st, &second_pkt);
-        grp_write_nand_unk(st, &third_pkt);
+        evt_write_nand_unk(st, pkt);
+        evt_write_nand_unk(st, &second_pkt);
+        evt_write_nand_unk(st, &third_pkt);
         return 0;
     }
 
-    grp.addr = second_pkt.data.nand_cycle.data;
-    grp.data = third_pkt.data.nand_cycle.data;
+    evt.addr = second_pkt.data.nand_cycle.data;
+    evt.data = third_pkt.data.nand_cycle.data;
 
-    grp_fill_end(&grp, third_pkt.header.sec, third_pkt.header.nsec);
-    write(st->out_fd, &grp, sizeof(grp));
+    evt_fill_end(&evt, third_pkt.header.sec, third_pkt.header.nsec);
+    write(st->out_fd, &evt, sizeof(evt));
     return 0;
 }
 
 
-static int grp_write_sandisk_charge1(struct state *st, struct pkt *pkt) {
-    struct grp_nand_sandisk_charge1 grp;
+static int evt_write_sandisk_charge1(struct state *st, struct pkt *pkt) {
+    struct evt_nand_sandisk_charge1 evt;
     struct pkt second_pkt, third_pkt, fourth_pkt;
-    grp_fill_header(&grp, pkt->header.sec, pkt->header.nsec,
-                    sizeof(grp), GRP_NAND_SANDISK_CHARGE1);
+    evt_fill_header(&evt, pkt->header.sec, pkt->header.nsec,
+                    sizeof(evt), EVT_NAND_SANDISK_CHARGE1);
 
     // Make sure the subsequent packet is an address
     packet_get_next(st, &second_pkt);
@@ -162,8 +167,8 @@ static int grp_write_sandisk_charge1(struct state *st, struct pkt *pkt) {
      || nand_cle(second_pkt.data.nand_cycle.control)
      || !nand_we(second_pkt.data.nand_cycle.control)) {
         fprintf(stderr, "Not a Sandisk charge(?) packet!\n");
-        grp_write_nand_unk(st, pkt);
-        grp_write_nand_unk(st, &second_pkt);
+        evt_write_nand_unk(st, pkt);
+        evt_write_nand_unk(st, &second_pkt);
         return 0;
     }
 
@@ -172,9 +177,9 @@ static int grp_write_sandisk_charge1(struct state *st, struct pkt *pkt) {
      || nand_cle(third_pkt.data.nand_cycle.control)
      || !nand_we(third_pkt.data.nand_cycle.control)) {
         fprintf(stderr, "Not a Sandisk charge(?) packet!\n");
-        grp_write_nand_unk(st, pkt);
-        grp_write_nand_unk(st, &second_pkt);
-        grp_write_nand_unk(st, &third_pkt);
+        evt_write_nand_unk(st, pkt);
+        evt_write_nand_unk(st, &second_pkt);
+        evt_write_nand_unk(st, &third_pkt);
         return 0;
     }
 
@@ -183,28 +188,28 @@ static int grp_write_sandisk_charge1(struct state *st, struct pkt *pkt) {
      || nand_cle(fourth_pkt.data.nand_cycle.control)
      || !nand_we(fourth_pkt.data.nand_cycle.control)) {
         fprintf(stderr, "Not a Sandisk charge(?) packet!\n");
-        grp_write_nand_unk(st, pkt);
-        grp_write_nand_unk(st, &second_pkt);
-        grp_write_nand_unk(st, &third_pkt);
-        grp_write_nand_unk(st, &fourth_pkt);
+        evt_write_nand_unk(st, pkt);
+        evt_write_nand_unk(st, &second_pkt);
+        evt_write_nand_unk(st, &third_pkt);
+        evt_write_nand_unk(st, &fourth_pkt);
         return 0;
     }
 
-    grp.addr[0] = second_pkt.data.nand_cycle.data;
-    grp.addr[1] = third_pkt.data.nand_cycle.data;
-    grp.addr[2] = fourth_pkt.data.nand_cycle.data;
+    evt.addr[0] = second_pkt.data.nand_cycle.data;
+    evt.addr[1] = third_pkt.data.nand_cycle.data;
+    evt.addr[2] = fourth_pkt.data.nand_cycle.data;
 
-    grp_fill_end(&grp, fourth_pkt.header.sec, fourth_pkt.header.nsec);
-    write(st->out_fd, &grp, sizeof(grp));
+    evt_fill_end(&evt, fourth_pkt.header.sec, fourth_pkt.header.nsec);
+    write(st->out_fd, &evt, sizeof(evt));
     return 0;
 }
 
 
-static int grp_write_sandisk_charge2(struct state *st, struct pkt *pkt) {
-    struct grp_nand_sandisk_charge2 grp;
+static int evt_write_sandisk_charge2(struct state *st, struct pkt *pkt) {
+    struct evt_nand_sandisk_charge2 evt;
     struct pkt second_pkt, third_pkt, fourth_pkt;
-    grp_fill_header(&grp, pkt->header.sec, pkt->header.nsec,
-                    sizeof(grp), GRP_NAND_SANDISK_CHARGE1);
+    evt_fill_header(&evt, pkt->header.sec, pkt->header.nsec,
+                    sizeof(evt), EVT_NAND_SANDISK_CHARGE1);
 
     // Make sure the subsequent packet is an address
     packet_get_next(st, &second_pkt);
@@ -212,8 +217,8 @@ static int grp_write_sandisk_charge2(struct state *st, struct pkt *pkt) {
      || nand_cle(second_pkt.data.nand_cycle.control)
      || !nand_we(second_pkt.data.nand_cycle.control)) {
         fprintf(stderr, "Not a Sandisk charge2(?) packet!\n");
-        grp_write_nand_unk(st, pkt);
-        grp_write_nand_unk(st, &second_pkt);
+        evt_write_nand_unk(st, pkt);
+        evt_write_nand_unk(st, &second_pkt);
         return 0;
     }
 
@@ -222,9 +227,9 @@ static int grp_write_sandisk_charge2(struct state *st, struct pkt *pkt) {
      || nand_cle(third_pkt.data.nand_cycle.control)
      || !nand_we(third_pkt.data.nand_cycle.control)) {
         fprintf(stderr, "Not a Sandisk charge2(?) packet!\n");
-        grp_write_nand_unk(st, pkt);
-        grp_write_nand_unk(st, &second_pkt);
-        grp_write_nand_unk(st, &third_pkt);
+        evt_write_nand_unk(st, pkt);
+        evt_write_nand_unk(st, &second_pkt);
+        evt_write_nand_unk(st, &third_pkt);
         return 0;
     }
 
@@ -233,90 +238,90 @@ static int grp_write_sandisk_charge2(struct state *st, struct pkt *pkt) {
      || nand_cle(fourth_pkt.data.nand_cycle.control)
      || !nand_we(fourth_pkt.data.nand_cycle.control)) {
         fprintf(stderr, "Not a Sandisk charge2(?) packet!\n");
-        grp_write_nand_unk(st, pkt);
-        grp_write_nand_unk(st, &second_pkt);
-        grp_write_nand_unk(st, &third_pkt);
-        grp_write_nand_unk(st, &fourth_pkt);
+        evt_write_nand_unk(st, pkt);
+        evt_write_nand_unk(st, &second_pkt);
+        evt_write_nand_unk(st, &third_pkt);
+        evt_write_nand_unk(st, &fourth_pkt);
         return 0;
     }
 
-    grp.addr[0] = second_pkt.data.nand_cycle.data;
-    grp.addr[1] = third_pkt.data.nand_cycle.data;
-    grp.addr[2] = fourth_pkt.data.nand_cycle.data;
+    evt.addr[0] = second_pkt.data.nand_cycle.data;
+    evt.addr[1] = third_pkt.data.nand_cycle.data;
+    evt.addr[2] = fourth_pkt.data.nand_cycle.data;
 
-    grp_fill_end(&grp, fourth_pkt.header.sec, fourth_pkt.header.nsec);
-    write(st->out_fd, &grp, sizeof(grp));
+    evt_fill_end(&evt, fourth_pkt.header.sec, fourth_pkt.header.nsec);
+    write(st->out_fd, &evt, sizeof(evt));
     return 0;
 }
 
 
-static int grp_write_nand_reset(struct state *st, struct pkt *pkt) {
-    struct grp_nand_reset grp;
+static int evt_write_nand_reset(struct state *st, struct pkt *pkt) {
+    struct evt_nand_reset evt;
     struct pkt second_pkt;
-    grp_fill_header(&grp, pkt->header.sec, pkt->header.nsec,
-                    sizeof(grp), GRP_NAND_RESET);
+    evt_fill_header(&evt, pkt->header.sec, pkt->header.nsec,
+                    sizeof(evt), EVT_NAND_RESET);
 
     // Make sure the subsequent packet is 0xc5
     packet_get_next(st, &second_pkt);
     if (!nand_cle(second_pkt.data.nand_cycle.control)
      || second_pkt.data.nand_cycle.data != 0x00) {
         fprintf(stderr, "Not a reset packet!\n");
-        grp_write_nand_unk(st, pkt);
-        grp_write_nand_unk(st, &second_pkt);
+        evt_write_nand_unk(st, pkt);
+        evt_write_nand_unk(st, &second_pkt);
         return 0;
     }
 
-    grp_fill_end(&grp, second_pkt.header.sec, second_pkt.header.nsec);
-    write(st->out_fd, &grp, sizeof(grp));
+    evt_fill_end(&evt, second_pkt.header.sec, second_pkt.header.nsec);
+    write(st->out_fd, &evt, sizeof(evt));
     return 0;
 }
 
 
-static int grp_write_nand_cache1(struct state *st, struct pkt *pkt) {
-    struct grp_nand_cache1 grp;
-    grp_fill_header(&grp, pkt->header.sec, pkt->header.nsec,
-                    sizeof(grp), GRP_NAND_CACHE1);
-    grp_fill_end(&grp, pkt->header.sec, pkt->header.nsec);
-    write(st->out_fd, &grp, sizeof(grp));
+static int evt_write_nand_cache1(struct state *st, struct pkt *pkt) {
+    struct evt_nand_cache1 evt;
+    evt_fill_header(&evt, pkt->header.sec, pkt->header.nsec,
+                    sizeof(evt), EVT_NAND_CACHE1);
+    evt_fill_end(&evt, pkt->header.sec, pkt->header.nsec);
+    write(st->out_fd, &evt, sizeof(evt));
     return 0;
 }
 
 
-static int grp_write_nand_cache2(struct state *st, struct pkt *pkt) {
-    struct grp_nand_cache2 grp;
-    grp_fill_header(&grp, pkt->header.sec, pkt->header.nsec,
-                    sizeof(grp), GRP_NAND_CACHE2);
-    grp_fill_end(&grp, pkt->header.sec, pkt->header.nsec);
-    write(st->out_fd, &grp, sizeof(grp));
+static int evt_write_nand_cache2(struct state *st, struct pkt *pkt) {
+    struct evt_nand_cache2 evt;
+    evt_fill_header(&evt, pkt->header.sec, pkt->header.nsec,
+                    sizeof(evt), EVT_NAND_CACHE2);
+    evt_fill_end(&evt, pkt->header.sec, pkt->header.nsec);
+    write(st->out_fd, &evt, sizeof(evt));
     return 0;
 }
 
 
-static int grp_write_nand_cache3(struct state *st, struct pkt *pkt) {
-    struct grp_nand_cache3 grp;
-    grp_fill_header(&grp, pkt->header.sec, pkt->header.nsec,
-                    sizeof(grp), GRP_NAND_CACHE3);
-    grp_fill_end(&grp, pkt->header.sec, pkt->header.nsec);
-    write(st->out_fd, &grp, sizeof(grp));
+static int evt_write_nand_cache3(struct state *st, struct pkt *pkt) {
+    struct evt_nand_cache3 evt;
+    evt_fill_header(&evt, pkt->header.sec, pkt->header.nsec,
+                    sizeof(evt), EVT_NAND_CACHE3);
+    evt_fill_end(&evt, pkt->header.sec, pkt->header.nsec);
+    write(st->out_fd, &evt, sizeof(evt));
     return 0;
 }
 
 
-static int grp_write_nand_cache4(struct state *st, struct pkt *pkt) {
-    struct grp_nand_cache4 grp;
-    grp_fill_header(&grp, pkt->header.sec, pkt->header.nsec,
-                    sizeof(grp), GRP_NAND_CACHE4);
-    grp_fill_end(&grp, pkt->header.sec, pkt->header.nsec);
-    write(st->out_fd, &grp, sizeof(grp));
+static int evt_write_nand_cache4(struct state *st, struct pkt *pkt) {
+    struct evt_nand_cache4 evt;
+    evt_fill_header(&evt, pkt->header.sec, pkt->header.nsec,
+                    sizeof(evt), EVT_NAND_CACHE4);
+    evt_fill_end(&evt, pkt->header.sec, pkt->header.nsec);
+    write(st->out_fd, &evt, sizeof(evt));
     return 0;
 }
 
 
-static int grp_write_nand_status(struct state *st, struct pkt *pkt) {
-    struct grp_nand_status grp;
+static int evt_write_nand_status(struct state *st, struct pkt *pkt) {
+    struct evt_nand_status evt;
     struct pkt second_pkt;
-    grp_fill_header(&grp, pkt->header.sec, pkt->header.nsec,
-                    sizeof(grp), GRP_NAND_STATUS);
+    evt_fill_header(&evt, pkt->header.sec, pkt->header.nsec,
+                    sizeof(evt), EVT_NAND_STATUS);
 
     // Make sure the subsequent packet is a read of status
     packet_get_next(st, &second_pkt);
@@ -324,25 +329,25 @@ static int grp_write_nand_status(struct state *st, struct pkt *pkt) {
      || nand_cle(second_pkt.data.nand_cycle.control)
      || nand_we(second_pkt.data.nand_cycle.control)) {
         fprintf(stderr, "Not a NAND status packet!\n");
-        grp_write_nand_unk(st, pkt);
-        grp_write_nand_unk(st, &second_pkt);
+        evt_write_nand_unk(st, pkt);
+        evt_write_nand_unk(st, &second_pkt);
         return 0;
     }
 
-    grp.status = second_pkt.data.nand_cycle.data;
+    evt.status = second_pkt.data.nand_cycle.data;
 
-    grp_fill_end(&grp, second_pkt.header.sec, second_pkt.header.nsec);
-    write(st->out_fd, &grp, sizeof(grp));
+    evt_fill_end(&evt, second_pkt.header.sec, second_pkt.header.nsec);
+    write(st->out_fd, &evt, sizeof(evt));
     return 0;
 }
 
 
-static int grp_write_nand_parameter_page(struct state *st, struct pkt *pkt) {
-    struct grp_nand_parameter_read grp;
+static int evt_write_nand_parameter_page(struct state *st, struct pkt *pkt) {
+    struct evt_nand_parameter_read evt;
     struct pkt second_pkt;
 
-    grp_fill_header(&grp, pkt->header.sec, pkt->header.nsec,
-                    sizeof(grp), GRP_NAND_PARAMETER_READ);
+    evt_fill_header(&evt, pkt->header.sec, pkt->header.nsec,
+                    sizeof(evt), EVT_NAND_PARAMETER_READ);
 
     // Make sure the subsequent packet is a read of status
     packet_get_next(st, &second_pkt);
@@ -350,38 +355,38 @@ static int grp_write_nand_parameter_page(struct state *st, struct pkt *pkt) {
      || nand_cle(second_pkt.data.nand_cycle.control)
      || !nand_we(second_pkt.data.nand_cycle.control)) {
         fprintf(stderr, "Not a NAND parameter read!\n");
-        grp_write_nand_unk(st, pkt);
-        grp_write_nand_unk(st, &second_pkt);
+        evt_write_nand_unk(st, pkt);
+        evt_write_nand_unk(st, &second_pkt);
         return 0;
     }
 
-    grp.count = 0;
-    grp.addr = second_pkt.data.nand_cycle.data;
-    memset(grp.data, 0, sizeof(grp.data));
+    evt.count = 0;
+    evt.addr = second_pkt.data.nand_cycle.data;
+    memset(evt.data, 0, sizeof(evt.data));
 
-    grp.count = 0;
+    evt.count = 0;
 
-    grp_fill_end(&grp, second_pkt.header.sec, second_pkt.header.nsec);
+    evt_fill_end(&evt, second_pkt.header.sec, second_pkt.header.nsec);
     packet_get_next(st, pkt);
     while (nand_re(pkt->data.nand_cycle.control)) {
-        grp.data[grp.count++] = pkt->data.nand_cycle.data;
+        evt.data[evt.count++] = pkt->data.nand_cycle.data;
 
-        grp_fill_end(&grp, pkt->header.sec, pkt->header.nsec);
+        evt_fill_end(&evt, pkt->header.sec, pkt->header.nsec);
         packet_get_next(st, pkt);
     }
     packet_unget(st, pkt);
 
-    write(st->out_fd, &grp, sizeof(grp));
+    write(st->out_fd, &evt, sizeof(evt));
     return 0;
 }
 
 
-static int grp_write_nand_change_read_column(struct state *st, struct pkt *pkt) {
-    struct grp_nand_change_read_column grp;
+static int evt_write_nand_change_read_column(struct state *st, struct pkt *pkt) {
+    struct evt_nand_change_read_column evt;
     struct pkt pkts[6];
     int counter;
-    grp_fill_header(&grp, pkt->header.sec, pkt->header.nsec,
-                    sizeof(grp), GRP_NAND_CHANGE_READ_COLUMN);
+    evt_fill_header(&evt, pkt->header.sec, pkt->header.nsec,
+                    sizeof(evt), EVT_NAND_CHANGE_READ_COLUMN);
 
 
     for (counter=0; counter<5; counter++) {
@@ -392,9 +397,9 @@ static int grp_write_nand_change_read_column(struct state *st, struct pkt *pkt) 
          || !nand_we(pkts[counter].data.nand_cycle.control)) {
             int countdown;
             fprintf(stderr, "Not a page_select packet\n");
-            grp_write_nand_unk(st, pkt);
+            evt_write_nand_unk(st, pkt);
             for (countdown=0; countdown<=counter; countdown++)
-                grp_write_nand_unk(st, &pkts[countdown]);
+                evt_write_nand_unk(st, &pkts[countdown]);
             return 0;
         }
     }
@@ -407,43 +412,44 @@ static int grp_write_nand_change_read_column(struct state *st, struct pkt *pkt) 
      || pkts[counter].data.nand_cycle.data != 0xe0) {
         int countdown;
         fprintf(stderr, "Not a page_select packet (last packet wrong)\n");
-        grp_write_nand_unk(st, pkt);
+        evt_write_nand_unk(st, pkt);
         for (countdown=0; countdown<=counter; countdown++)
-            grp_write_nand_unk(st, &pkts[countdown]);
+            evt_write_nand_unk(st, &pkts[countdown]);
         return 0;
     }
 
-    grp.addr[0] = pkts[0].data.nand_cycle.data;
-    grp.addr[1] = pkts[1].data.nand_cycle.data;
-    grp.addr[2] = pkts[2].data.nand_cycle.data;
-    grp.addr[3] = pkts[3].data.nand_cycle.data;
-    grp.addr[4] = pkts[4].data.nand_cycle.data;
-    grp.addr[5] = pkts[5].data.nand_cycle.data;
+    evt.addr[0] = pkts[0].data.nand_cycle.data;
+    evt.addr[1] = pkts[1].data.nand_cycle.data;
+    evt.addr[2] = pkts[2].data.nand_cycle.data;
+    evt.addr[3] = pkts[3].data.nand_cycle.data;
+    evt.addr[4] = pkts[4].data.nand_cycle.data;
+    evt.addr[5] = pkts[5].data.nand_cycle.data;
 
-    grp.count = 0;
-    grp_fill_end(&grp, pkts[6].header.sec, pkts[6].header.nsec);
-    memcpy(grp.unknown, &pkt->data.nand_cycle.unknown, sizeof(grp.unknown));
+    evt.count = 0;
+    evt_fill_end(&evt, pkts[6].header.sec, pkts[6].header.nsec);
+    memcpy(evt.unknown, &pkt->data.nand_cycle.unknown, sizeof(evt.unknown));
     packet_get_next(st, pkt);
     while (nand_re(pkt->data.nand_cycle.control)) {
-        grp.data[grp.count++] = pkt->data.nand_cycle.data;
+        evt.data[evt.count++] = pkt->data.nand_cycle.data;
 
-        grp_fill_end(&grp, pkt->header.sec, pkt->header.nsec);
-        memcpy(grp.unknown, &pkt->data.nand_cycle.unknown, sizeof(grp.unknown));
+        evt_fill_end(&evt, pkt->header.sec, pkt->header.nsec);
+        memcpy(evt.unknown, &pkt->data.nand_cycle.unknown, sizeof(evt.unknown));
         packet_get_next(st, pkt);
     }
     packet_unget(st, pkt);
 
-    write(st->out_fd, &grp, sizeof(grp));
+    evt.count = htonl(evt.count);
+    write(st->out_fd, &evt, sizeof(evt));
     return 0;
 }
 
 
-static int grp_write_nand_read(struct state *st, struct pkt *pkt) {
-    struct grp_nand_read grp;
+static int evt_write_nand_read(struct state *st, struct pkt *pkt) {
+    struct evt_nand_read evt;
     struct pkt pkts[6];
     int counter;
-    grp_fill_header(&grp, pkt->header.sec, pkt->header.nsec,
-                    sizeof(grp), GRP_NAND_READ);
+    evt_fill_header(&evt, pkt->header.sec, pkt->header.nsec,
+                    sizeof(evt), EVT_NAND_READ);
 
 
     for (counter=0; counter<5; counter++) {
@@ -454,9 +460,9 @@ static int grp_write_nand_read(struct state *st, struct pkt *pkt) {
          || !nand_we(pkts[counter].data.nand_cycle.control)) {
             int countdown;
             fprintf(stderr, "Not a nand_read packet (counter %d)\n", counter);
-            grp_write_nand_unk(st, pkt);
+            evt_write_nand_unk(st, pkt);
             for (countdown=0; countdown<=counter; countdown++)
-                grp_write_nand_unk(st, &pkts[countdown]);
+                evt_write_nand_unk(st, &pkts[countdown]);
             return 0;
         }
     }
@@ -469,33 +475,35 @@ static int grp_write_nand_read(struct state *st, struct pkt *pkt) {
      || pkts[counter].data.nand_cycle.data != 0x30) {
         int countdown;
         fprintf(stderr, "Not a nand_read packet (last packet wrong)\n");
-        grp_write_nand_unk(st, pkt);
+        evt_write_nand_unk(st, pkt);
         for (countdown=0; countdown<=counter; countdown++)
-            grp_write_nand_unk(st, &pkts[countdown]);
+            evt_write_nand_unk(st, &pkts[countdown]);
         return 0;
     }
 
-    grp.addr[0] = pkts[0].data.nand_cycle.data;
-    grp.addr[1] = pkts[1].data.nand_cycle.data;
-    grp.addr[2] = pkts[2].data.nand_cycle.data;
-    grp.addr[3] = pkts[3].data.nand_cycle.data;
-    grp.addr[4] = pkts[4].data.nand_cycle.data;
-    grp.addr[5] = pkts[5].data.nand_cycle.data;
+    evt.addr[0] = pkts[0].data.nand_cycle.data;
+    evt.addr[1] = pkts[1].data.nand_cycle.data;
+    evt.addr[2] = pkts[2].data.nand_cycle.data;
+    evt.addr[3] = pkts[3].data.nand_cycle.data;
+    evt.addr[4] = pkts[4].data.nand_cycle.data;
+    evt.addr[5] = pkts[5].data.nand_cycle.data;
 
-    grp.count = 0;
-    grp_fill_end(&grp, pkts[6].header.sec, pkts[6].header.nsec);
-    memcpy(grp.unknown, &pkt->data.nand_cycle.unknown, sizeof(grp.unknown));
+    evt.count = 0;
+    evt_fill_end(&evt, pkts[6].header.sec, pkts[6].header.nsec);
+    memcpy(evt.unknown, &pkt->data.nand_cycle.unknown, sizeof(evt.unknown));
     packet_get_next(st, pkt);
     while (nand_re(pkt->data.nand_cycle.control)) {
-        grp.data[grp.count++] = pkt->data.nand_cycle.data;
+        evt.data[evt.count++] = pkt->data.nand_cycle.data;
 
-        grp_fill_end(&grp, pkt->header.sec, pkt->header.nsec);
-        memcpy(grp.unknown, &pkt->data.nand_cycle.unknown, sizeof(grp.unknown));
+        evt_fill_end(&evt, pkt->header.sec, pkt->header.nsec);
+        memcpy(evt.unknown, &pkt->data.nand_cycle.unknown, sizeof(evt.unknown));
         packet_get_next(st, pkt);
     }
     packet_unget(st, pkt);
 
-    write(st->out_fd, &grp, sizeof(grp));
+    evt.count = htonl(evt.count);
+
+    write(st->out_fd, &evt, sizeof(evt));
     return 0;
 }
 
@@ -508,52 +516,52 @@ static int write_nand_cmd(struct state *st, struct pkt *pkt) {
     if (!nand_cle(nand->control)) {
         fprintf(stderr, "We're lost in NAND-land.  ");
         nand_print(st, nand->data, nand->control);
-        grp_write_nand_unk(st, pkt);
+        evt_write_nand_unk(st, pkt);
         return 0;
     }
 
     // "Get ID" command
     if (nand->data == 0x90) {
-        return grp_write_id(st, pkt);
+        return evt_write_id(st, pkt);
     }
     else if (nand->data == 0x5c) {
-        grp_write_sandisk_set(st, pkt);
+        evt_write_sandisk_set(st, pkt);
     }
     else if (nand->data == 0xff) {
-        grp_write_nand_reset(st, pkt);
+        evt_write_nand_reset(st, pkt);
     }
     else if (nand->data == 0x55) {
-        grp_write_sandisk_param(st, pkt);
+        evt_write_sandisk_param(st, pkt);
     }
     else if (nand->data == 0x70) {
-        grp_write_nand_status(st, pkt);
+        evt_write_nand_status(st, pkt);
     }
     else if (nand->data == 0xec) {
-        grp_write_nand_parameter_page(st, pkt);
+        evt_write_nand_parameter_page(st, pkt);
     }
     else if (nand->data == 0x60) {
-        grp_write_sandisk_charge2(st, pkt);
+        evt_write_sandisk_charge2(st, pkt);
     }
     else if (nand->data == 0x65) {
-        grp_write_sandisk_charge1(st, pkt);
+        evt_write_sandisk_charge1(st, pkt);
     }
     else if (nand->data == 0x05) {
-        grp_write_nand_change_read_column(st, pkt);
+        evt_write_nand_change_read_column(st, pkt);
     }
     else if (nand->data == 0x00) {
-        grp_write_nand_read(st, pkt);
+        evt_write_nand_read(st, pkt);
     }
     else if (nand->data == 0x30) {
-        grp_write_nand_cache1(st, pkt);
+        evt_write_nand_cache1(st, pkt);
     }
     else if (nand->data == 0xa2) {
-        grp_write_nand_cache2(st, pkt);
+        evt_write_nand_cache2(st, pkt);
     }
     else if (nand->data == 0x69) {
-        grp_write_nand_cache3(st, pkt);
+        evt_write_nand_cache3(st, pkt);
     }
     else if (nand->data == 0xfd) {
-        grp_write_nand_cache4(st, pkt);
+        evt_write_nand_cache4(st, pkt);
     }
     else {
         fprintf(stderr, "Unknown NAND command.  ");
@@ -582,24 +590,24 @@ static int gstate_run(struct state *st) {
     return st_funcs[st->st](st);
 }
 
-void *grp_take(struct state *st, int type) {
+void *evt_take(struct state *st, int type) {
     int i;
-    for (i=0; i<(sizeof(st->groups)/sizeof(st->groups[0])); i++) {
-        if (st->groups[i] && st->groups[i]->type == type) {
-            void *val = st->groups[i];
-            st->groups[i] = NULL;
+    for (i=0; i<(sizeof(st->events)/sizeof(st->events[0])); i++) {
+        if (st->events[i] && st->events[i]->type == type) {
+            void *val = st->events[i];
+            st->events[i] = NULL;
             return val;
         }
     }
     return NULL;
 }
 
-int grp_put(struct state *st, void *v) {
-    struct grp_header *val = v;
+int evt_put(struct state *st, void *v) {
+    struct evt_header *val = v;
     int i;
-    for (i=0; i<(sizeof(st->groups)/sizeof(st->groups[0])); i++) {
-        if (!st->groups[i]) {
-            st->groups[i] = val;
+    for (i=0; i<(sizeof(st->events)/sizeof(st->events[0])); i++) {
+        if (!st->events[i]) {
+            st->events[i] = val;
             return 0;
         }
     }
@@ -621,11 +629,11 @@ static int st_scanning(struct state *st) {
     while ((ret = packet_get_next(st, &pkt)) == 0) {
 
         if (pkt.header.type == PACKET_HELLO) {
-            grp_write_hello(st, &pkt);
+            evt_write_hello(st, &pkt);
         }
 
         else if (pkt.header.type == PACKET_RESET) {
-            grp_write_reset(st, &pkt);
+            evt_write_reset(st, &pkt);
         }
 
         else if (pkt.header.type == PACKET_NAND_CYCLE) {
@@ -634,132 +642,138 @@ static int st_scanning(struct state *st) {
 
         else if (pkt.header.type == PACKET_COMMAND) {
             if (pkt.data.command.start_stop == CMD_STOP) {
-                struct grp_net_cmd *net = grp_take(st, GRP_NET_CMD);
+                struct evt_net_cmd *net = evt_take(st, EVT_NET_CMD);
                 if (!net) {
-                    struct grp_net_cmd grp;
+                    struct evt_net_cmd evt;
                     fprintf(stderr, "NET_CMD end without begin\n");
-                    grp_fill_header(&grp, pkt.header.sec, pkt.header.nsec,
-                                    sizeof(grp), GRP_NET_CMD);
-                    grp.cmd[0] = pkt.data.command.cmd[0];
-                    grp.cmd[1] = pkt.data.command.cmd[1];
-                    grp.arg = pkt.data.command.arg;
-                    grp_fill_end(&grp, pkt.header.sec, pkt.header.nsec);
-                    write(st->out_fd, &grp, sizeof(grp));
+                    evt_fill_header(&evt, pkt.header.sec, pkt.header.nsec,
+                                    sizeof(evt), EVT_NET_CMD);
+                    evt.cmd[0] = pkt.data.command.cmd[0];
+                    evt.cmd[1] = pkt.data.command.cmd[1];
+                    evt.arg = pkt.data.command.arg;
+                    evt_fill_end(&evt, pkt.header.sec, pkt.header.nsec);
+                    evt.arg = htonl(evt.arg);
+                    write(st->out_fd, &evt, sizeof(evt));
                 }
                 else {
-                    grp_fill_end(net, pkt.header.sec, pkt.header.nsec);
+                    evt_fill_end(net, pkt.header.sec, pkt.header.nsec);
+                    net->arg = htonl(net->arg);
                     write(st->out_fd, net, sizeof(*net));
                     free(net);
                 }
             }
             else {
-                struct grp_net_cmd *net = grp_take(st, GRP_NET_CMD);
+                struct evt_net_cmd *net = evt_take(st, EVT_NET_CMD);
                 if (net) {
                     fprintf(stderr, "Multiple NET_CMDs going at once\n");
                     free(net);
                 }
 
-                net = malloc(sizeof(struct grp_net_cmd));
-                grp_fill_header(net, pkt.header.sec, pkt.header.nsec,
-                                sizeof(*net), GRP_NET_CMD);
+                net = malloc(sizeof(struct evt_net_cmd));
+                evt_fill_header(net, pkt.header.sec, pkt.header.nsec,
+                                sizeof(*net), EVT_NET_CMD);
                 net->cmd[0] = pkt.data.command.cmd[0];
                 net->cmd[1] = pkt.data.command.cmd[1];
                 net->arg = pkt.data.command.arg;
-                grp_put(st, net);
+                evt_put(st, net);
             }
         }
 
         else if (pkt.header.type == PACKET_BUFFER_DRAIN) {
             if (pkt.data.buffer_drain.start_stop == PKT_BUFFER_DRAIN_STOP) {
-                struct grp_buffer_drain *grp = grp_take(st, GRP_BUFFER_DRAIN);
-                if (!grp) {
-                    struct grp_buffer_drain grp;
+                struct evt_buffer_drain *evt = evt_take(st, EVT_BUFFER_DRAIN);
+                if (!evt) {
+                    struct evt_buffer_drain evt;
                     fprintf(stderr, "BUFFER_DRAIN end without begin\n");
-                    grp_fill_header(&grp, pkt.header.sec, pkt.header.nsec,
-                                    sizeof(grp), GRP_BUFFER_DRAIN);
-                    grp_fill_end(&grp, pkt.header.sec, pkt.header.nsec);
-                    write(st->out_fd, &grp, sizeof(grp));
+                    evt_fill_header(&evt, pkt.header.sec, pkt.header.nsec,
+                                    sizeof(evt), EVT_BUFFER_DRAIN);
+                    evt_fill_end(&evt, pkt.header.sec, pkt.header.nsec);
+                    write(st->out_fd, &evt, sizeof(evt));
                 }
                 else {
-                    grp_fill_end(grp, pkt.header.sec, pkt.header.nsec);
-                    write(st->out_fd, grp, sizeof(*grp));
-                    free(grp);
+                    evt_fill_end(evt, pkt.header.sec, pkt.header.nsec);
+                    write(st->out_fd, evt, sizeof(*evt));
+                    free(evt);
                 }
             }
             else {
-                struct grp_buffer_drain *grp = grp_take(st, GRP_BUFFER_DRAIN);
-                if (grp) {
+                struct evt_buffer_drain *evt = evt_take(st, EVT_BUFFER_DRAIN);
+                if (evt) {
                     fprintf(stderr, "Multiple BUFFER_DRAINs going at once\n");
-                    free(grp);
+                    free(evt);
                 }
 
-                grp = malloc(sizeof(struct grp_buffer_drain));
-                grp_fill_header(grp, pkt.header.sec, pkt.header.nsec,
-                                sizeof(*grp), GRP_BUFFER_DRAIN);
-                grp_put(st, grp);
+                evt = malloc(sizeof(struct evt_buffer_drain));
+                evt_fill_header(evt, pkt.header.sec, pkt.header.nsec,
+                                sizeof(*evt), EVT_BUFFER_DRAIN);
+                evt_put(st, evt);
             }
         }
 
         else if (pkt.header.type == PACKET_SD_CMD_ARG) {
-            struct grp_sd_cmd *grp = grp_take(st, GRP_SD_CMD);
+            struct evt_sd_cmd *evt = evt_take(st, EVT_SD_CMD);
             struct pkt_sd_cmd_arg *sd = &pkt.data.sd_cmd_arg;
-            if (!grp) {
-                grp = malloc(sizeof(struct grp_sd_cmd));
-                memset(grp, 0, sizeof(*grp));
-                grp_fill_header(grp, pkt.header.sec, pkt.header.nsec,
-                                sizeof(*grp), GRP_SD_CMD);
+            if (!evt) {
+                evt = malloc(sizeof(struct evt_sd_cmd));
+                memset(evt, 0, sizeof(*evt));
+                evt_fill_header(evt, pkt.header.sec, pkt.header.nsec,
+                                sizeof(*evt), EVT_SD_CMD);
             }
 
             // Ignore args for CMD55
-            if ((grp->num_args || sd->reg>0) && grp->cmd != 0x55) {
-                grp->args[grp->num_args++] = sd->val;
+            if ((evt->num_args || sd->reg>0) && evt->cmd != 0x55) {
+                evt->args[evt->num_args++] = sd->val;
             }
 
             // Register 0 implies this is a CMD.
             else if (sd->reg == 0) {
-                if (grp->cmd == 0x55)
-                    grp->cmd = 0x80 | (0x3f & sd->val);
+                if (evt->cmd == 0x55)
+                    evt->cmd = 0x80 | (0x3f & sd->val);
                 else
-                    grp->cmd = 0x3f & sd->val;
+                    evt->cmd = 0x3f & sd->val;
             }
-            grp_put(st, grp);
+            evt_put(st, evt);
         }
         else if (pkt.header.type == PACKET_SD_RESPONSE) {
-            struct grp_sd_cmd *grp = grp_take(st, GRP_SD_CMD);
+            struct evt_sd_cmd *evt = evt_take(st, EVT_SD_CMD);
             // Ignore CMD17, as we'll pick it up on the PACKET_SD_DATA packet
-            if (grp->cmd == 17) {
-                grp_put(st, grp);
+            if (evt->cmd == 17) {
+                evt_put(st, evt);
             }
             else {
                 struct pkt_sd_response *sd = &pkt.data.response;
-                if (!grp) {
-                    fprintf(stderr, "Couldn't find old GRP_SD_CMD in SD_RESPONSE\n");
+                if (!evt) {
+                    fprintf(stderr, "Couldn't find old EVT_SD_CMD in SD_RESPONSE\n");
                     continue;
                 }
 
-                grp->result[grp->num_results++] = sd->byte;
+                evt->result[evt->num_results++] = sd->byte;
+                evt->num_results = htonl(evt->num_results);
+                evt->num_args = htonl(evt->num_args);
 
-                grp_fill_end(grp, pkt.header.sec, pkt.header.nsec);
-                write(st->out_fd, grp, sizeof(*grp));
-                free(grp);
+                evt_fill_end(evt, pkt.header.sec, pkt.header.nsec);
+                write(st->out_fd, evt, sizeof(*evt));
+                free(evt);
             }
         }
 
         else if (pkt.header.type == PACKET_SD_DATA) {
-            struct grp_sd_cmd *grp = grp_take(st, GRP_SD_CMD);
+            struct evt_sd_cmd *evt = evt_take(st, EVT_SD_CMD);
             struct pkt_sd_data *sd = &pkt.data.sd_data;
             int offset;
-            if (!grp) {
-                fprintf(stderr, "Couldn't find old SD_GRP_CMD in SD_DATA\n");
+            if (!evt) {
+                fprintf(stderr, "Couldn't find old SD_EVT_CMD in SD_DATA\n");
                 continue;
             }
 
             for (offset=0; offset<sizeof(sd->data); offset++)
-                grp->result[grp->num_results++] = sd->data[offset];
+                evt->result[evt->num_results++] = sd->data[offset];
 
-            grp_fill_end(grp, pkt.header.sec, pkt.header.nsec);
-            write(st->out_fd, grp, sizeof(*grp));
-            free(grp);
+            evt->num_results = htonl(evt->num_results);
+            evt->num_args = htonl(evt->num_args);
+            evt_fill_end(evt, pkt.header.sec, pkt.header.nsec);
+            write(st->out_fd, evt, sizeof(*evt));
+            free(evt);
         }
 
         else {

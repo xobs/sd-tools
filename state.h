@@ -30,7 +30,7 @@ struct state {
     int join_buffer_capacity;
 
     /* For group-joining, a list of open items */
-    struct grp_header *groups[128];
+    struct evt_header *events[128];
 };
 
 int packet_get_next(struct state *st, struct pkt *pkt);
