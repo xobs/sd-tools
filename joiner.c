@@ -260,6 +260,15 @@ static int st_backtrack(struct state *st) {
                 pkt.header.sec -= sec_dif;
             }
 
+            // Fudge the time for the "reset card" command
+            // (due to timing weirdness, it can vary widely.)
+            if (pkt.header.type == PACKET_COMMAND
+             && pkt.data.command.cmd[0] == 'r'
+             && pkt.data.command.cmd[1] == 'c') {
+                pkt.header.sec = 0;
+                pkt.header.nsec = 8;
+            }
+
             if (pkt.header.sec < 0)
                 printf("!!! Warning: header.sec < 0: %d\n", pkt.header.sec);
             if (pkt.header.nsec < 0)
