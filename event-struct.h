@@ -4,6 +4,9 @@
 #define EVENT_MAGIC_1 0x61728394
 #define EVENT_MAGIC_2 0x74931723
 
+static const char EVENT_HDR_1[4] = "TBEv";
+static const char EVENT_HDR_2[4] = "MaDa";
+
 #include <stdint.h>
 struct state;
 struct pkt;
@@ -224,5 +227,9 @@ int evt_fill_end(void *arg,
 int evt_write_hello(struct state *st, struct pkt *pkt);
 int evt_write_reset(struct state *st, struct pkt *pkt);
 int evt_write_nand_unk(struct state *st, struct pkt *pkt);
+
+int event_get_next(struct state *st, union evt *evt);
+int event_unget(struct state *st, union evt *evt);
+int event_write(struct state *st, union evt *evt);
 
 #endif //__EVENT_STRUCT_H_

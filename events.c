@@ -4,6 +4,67 @@
 #include "packet-struct.h"
 #include "event-struct.h"
 
+int event_get_next(struct state *st, union evt *evt) {
+    int ret;
+    int bytes_to_read;
+
+    ret = read(st->fd, &evt->header, sizeof(evt->header));
+    if (ret < 0) {
+        perror("Couldn't read header");
+        return -1;
+    }
+
+    if (ret == 0) {
+        perror("End of file for header");
+        return -2;
+    }
+    evt->header.sec_start = ntohl(evt->header.sec_start);
+    evt->header.nsec_start = ntohl(evt->header.nsec_start);
+    evt->header.sec_end = ntohl(evt->header.sec_end);
+    evt->header.nsec_end = ntohl(evt->header.nsec_end);
+    evt->header.size = ntohl(evt->header.size);
+
+    bytes_to_read = evt->header.size - sizeof(evt->header);
+    ret = read(st->fd,
+               ((char *)&(evt->header)) + sizeof(evt->header),
+               bytes_to_read);
+
+    if (ret < 0) {
+        perror("Couldn't read");
+        return -1;
+    }
+
+    if (ret == 0 && bytes_to_read > 0) {
+        perror("End of file");
+        return -2;
+    }
+
+    return 0;
+}
+
+int event_unget(struct state *st, union evt *evt) {
+    return lseek(st->fd, -evt->header.size, SEEK_CUR);
+}
+
+int event_write(struct state *st, union evt *evt) {
+    int ret;
+    evt->header.sec_start = htonl(evt->header.sec_start);
+    evt->header.nsec_start = htonl(evt->header.nsec_start);
+    evt->header.sec_end = htonl(evt->header.sec_end);
+    evt->header.nsec_end = htonl(evt->header.nsec_end);
+    evt->header.size = htonl(evt->header.size);
+    ret = write(st->out_fd, evt, ntohl(evt->header.size));
+
+    evt->header.sec_start = ntohl(evt->header.sec_start);
+    evt->header.nsec_start = ntohl(evt->header.nsec_start);
+    evt->header.sec_end = ntohl(evt->header.sec_end);
+    evt->header.nsec_end = ntohl(evt->header.nsec_end);
+    evt->header.size = ntohl(evt->header.size);
+
+    return ret;
+}
+
+
 int evt_fill_header(void *arg, uint32_t sec_start, uint32_t nsec_start,
                     uint32_t size, uint8_t type) {
     struct evt_header *hdr = arg;
